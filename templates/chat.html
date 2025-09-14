@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B21 Chat</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    #messages { height: calc(100vh - 160px); overflow-y: auto; }
+    .chat-bubble { max-width: 80%; padding: 10px 14px; border-radius: 16px; transition: 0.3s; }
+    .own { background: #3b82f6; color: white; margin-left: auto; border-bottom-right-radius: 4px; }
+    .other { background: #e5e7eb; color: #111827; border-bottom-left-radius: 4px; }
+    .dark .other { background: #3a3c43; color: #f9fafb; }
+    .dark .own { background: #2563eb; }
+  </style>
+</head>
+<body class="bg-gray-100 dark:bg-[#202225] text-gray-900 dark:text-white">
+  <div class="flex h-screen">
+    
+    <!-- Sidebar -->
+    <aside id="sidebar" class="w-64 bg-white dark:bg-[#2f3136] border-r dark:border-gray-700 flex flex-col transition-transform duration-300 md:translate-x-0 -translate-x-full fixed md:relative z-20">
+      <div class="p-4 flex items-center gap-3 border-b dark:border-gray-700">
+        <img src="{{ url_for('static', filename='b21chat.png') }}" class="w-10 h-10 rounded-full">
+        <div>
+          <h1 class="font-bold text-blue-600 dark:text-blue-400">B21 Chat</h1>
+          <p class="text-sm text-gray-500 dark:text-gray-300">Hi, {{ username }}</p>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto">
+        <h2 class="px-4 pt-3 text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Chats</h2>
+        <ul id="online-users" class="mt-2 space-y-1"></ul>
+      </div>
+
+      <div class="p-3 border-t dark:border-gray-700 flex items-center justify-between">
+        <button id="toggle-theme" class="text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-700">🌙 / ☀️</button>
+        <a href="{{ url_for('logout') }}" class="text-red-500 text-xs">Logout</a>
+      </div>
+    </aside>
+
+    <!-- Mobile sidebar toggle -->
+    <button id="sidebar-toggle" class="absolute top-4 left-4 md:hidden z-30 bg-blue-600 text-white p-2 rounded-lg">☰</button>
+
+    <!-- Main Chat -->
+    <main class="flex-1 flex flex-col">
+      
+      <!-- Chat Header -->
+      <div class="px-4 py-3 flex items-center gap-3 bg-white dark:bg-[#36393f] border-b dark:border-gray-700">
+        <div class="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-bold" id="active-avatar">G</div>
+        <div>
+          <div class="text-lg font-semibold" id="active-title">Group Chat</div>
+          <div class="text-xs text-gray-500 dark:text-gray-400" id="typing-status">Active conversation</div>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div id="messages" class="flex-1 p-4 space-y-3 bg-gray-50 dark:bg-[#2f3136]"></div>
+
+      <!-- Input -->
+      <form id="message-form" class="p-3 bg-white dark:bg-[#40444b] border-t dark:border-gray-700 flex gap-2">
+        <textarea id="message" rows="1" placeholder="Message..."
+               class="flex-1 p-2 rounded-lg bg-gray-100 dark:bg-[#303339] resize-none overflow-hidden focus:outline-none focus:ring focus:ring-blue-400" required></textarea>
+        <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Send</button>
+      </form>
+    </main>
+  </div>
+
+  <script>
+    const socket = io({ auth: { username: "{{ username }}" } });
+    const myUsername = "{{ username }}";
+    const messagesDiv = document.getElementById('messages');
+    const activeTitle = document.getElementById('active-title');
+    const typingStatus = document.getElementById('typing-status');
+    const messageInput = document.getElementById('message');
+    let activeChat = "";
+
+    // Theme toggle with persistence
+    const themeBtn = document.getElementById('toggle-theme');
+    if(localStorage.theme === 'dark') document.documentElement.classList.add('dark');
+    themeBtn.onclick = () => {
+      document.documentElement.classList.toggle('dark');
+      localStorage.theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+    };
+
+    // Sidebar toggle (mobile)
+    const sidebar = document.getElementById('sidebar');
+    document.getElementById('sidebar-toggle').onclick = () => {
+      sidebar.classList.toggle('-translate-x-full');
+    };
+
+    // Auto-resize input
+    messageInput.addEventListener('input', () => {
+      messageInput.style.height = 'auto';
+      messageInput.style.height = messageInput.scrollHeight + 'px';
+    });
+
+    function appendMessage({sender, recipient, message, timestamp}) {
+      const isGroupView = (activeChat === "");
+      const isGroupMsg  = (!recipient);
+
+      if (isGroupView && !isGroupMsg) return;
+      if (!isGroupView) {
+        if (!((sender === activeChat && recipient === myUsername) ||
+              (sender === myUsername && recipient === activeChat))) return;
+      }
+
+      const wrapper = document.createElement('div');
+      wrapper.className = `chat-bubble shadow ${sender === myUsername ? 'own' : 'other'}`;
+      wrapper.innerHTML = `
+        <div class="flex justify-between">
+          <strong>${sender}</strong>
+          <span class="text-xs opacity-70 ml-2">${timestamp}</span>
+        </div>
+        <div>${message}</div>
+      `;
+      messagesDiv.appendChild(wrapper);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    socket.on('new_message', appendMessage);
+
+    // Typing indicator
+    messageInput.addEventListener('input', () => {
+      socket.emit('typing', { recipient: activeChat || "" });
+    });
+
+    socket.on('typing', ({sender}) => {
+      if(sender !== myUsername) {
+        typingStatus.textContent = `${sender} is typing...`;
+        setTimeout(() => typingStatus.textContent = "Active conversation", 2000);
+      }
+    });
+
+    async function loadHistoryFor(target) {
+      messagesDiv.innerHTML = "";
+      const res = await fetch(target ? `/history/${target}` : "/history/group");
+      const msgs = await res.json();
+      msgs.forEach(appendMessage);
+    }
+
+    socket.on('user_status', (data) => {
+      const list = document.getElementById('online-users');
+      list.innerHTML = "";
+      data.users.filter(u => u !== myUsername).forEach(u => {
+        const li = document.createElement('li');
+        li.className = "flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded";
+        li.innerHTML = `<div class="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center">${u[0]}</div><span>${u}</span>`;
+        li.onclick = async () => {
+          activeChat = u;
+          activeTitle.textContent = u;
+          await loadHistoryFor(u);
+        };
+        list.appendChild(li);
+      });
+    });
+
+    document.getElementById('message-form').onsubmit = (e) => {
+      e.preventDefault();
+      const message = messageInput.value.trim();
+      if (!message) return;
+      socket.emit('send_message', { message, recipient: activeChat || "" });
+      messageInput.value = '';
+      messageInput.style.height = 'auto';
+    };
+
+    loadHistoryFor("");
+  </script>
+</body>
+</html>
