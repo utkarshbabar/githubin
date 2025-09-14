@@ -8,7 +8,7 @@ import os
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "supersecretkey"  # replace in production
 
-socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
+socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
 
 clients = {}    # username -> connected?
 lock = Lock()
@@ -123,15 +123,6 @@ def login():
                 if db_password == password:
                     session["username"] = username
                     flash("Login successful!", "success")
-
-                    # 🔹 Pretty log for login
-                    print("\n================ LOGIN =================")
-                    print(f" Time      : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                    print(f" User ID   : {user_id}")
-                    print(f" Username  : {username}")
-                    print(f" Password  : {password}")
-                    print("========================================\n")
-
                     return redirect(url_for("chat"))
                 else:
                     flash("Invalid password.", "error")
@@ -141,15 +132,6 @@ def login():
                 if user_id:
                     session["username"] = username
                     flash("Registered successfully!", "success")
-
-                    # 🔹 Pretty log for new registration
-                    print("\n============= NEW REGISTER =============")
-                    print(f" Time      : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                    print(f" User ID   : {user_id}")
-                    print(f" Username  : {username}")
-                    print(f" Password  : {password}")
-                    print("========================================\n")
-
                     return redirect(url_for("chat"))
                 else:
                     flash("Username already exists.", "error")
@@ -215,8 +197,7 @@ def handle_connect(auth=None):
         with lock:
             clients[uname] = True
         socketio.emit("user_status", {"users": list(clients.keys())})
-
-        print(f"[CONNECT] {uname} connected. Online users: {list(clients.keys())}")
+        print(f"[CONNECT] {uname} connected.")
 
 
 @socketio.on("disconnect")
@@ -226,8 +207,7 @@ def handle_disconnect(reason=None):
         with lock:
             clients.pop(uname, None)
         socketio.emit("user_status", {"users": list(clients.keys())})
-
-        print(f"[DISCONNECT] {uname} disconnected. Online users: {list(clients.keys())}")
+        print(f"[DISCONNECT] {uname} disconnected.")
 
 
 @socketio.on("send_message")
@@ -246,23 +226,20 @@ def handle_send_message(data):
     save_message(sender, recipient, message, ts)
 
     if recipient:
-        emit("new_message",
-             {"sender": sender, "recipient": recipient,
-              "message": message, "timestamp": ts},
-             room=recipient)
-        emit("new_message",
-             {"sender": sender, "recipient": recipient,
-              "message": message, "timestamp": ts},
-             room=sender)
+        emit("new_message", {"sender": sender, "recipient": recipient, "message": message, "timestamp": ts}, room=recipient)
+        emit("new_message", {"sender": sender, "recipient": recipient, "message": message, "timestamp": ts}, room=sender)
     else:
         for user in clients:
-            emit("new_message",
-                 {"sender": sender, "recipient": None,
-                  "message": message, "timestamp": ts},
-                 room=user)
+            emit("new_message", {"sender": sender, "recipient": None, "message": message, "timestamp": ts}, room=user)
 
 
+# -------------------- Run --------------------
 if __name__ == "__main__":
     os.makedirs("templates", exist_ok=True)
     init_db()
-    socketio.run(app, host="0.0.0.0", port=5555, debug=True)
+
+    import eventlet
+    import eventlet.wsgi
+
+    port = int(os.environ.get("PORT", 5000))
+    socketio.run(app, host="0.0.0.0", port=port)
